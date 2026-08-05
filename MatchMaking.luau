@@ -16,19 +16,7 @@ local updateClientPartyStatusEvent = ReplicatedStorage:WaitForChild("UpdateClien
 local updateClientMatchmakingStatusEvent = ReplicatedStorage:WaitForChild("UpdateClientMatchmakingStatus")
 local sendPartyInviteEvent = ReplicatedStorage:WaitForChild("SendPartyInvite")
 local acceptPartyInviteEvent = ReplicatedStorage:WaitForChild("AcceptPartyInvite")
-
-if not ReplicatedStorage:FindFirstChild("ReceivePartyInvite") then
-	local receivePartyInviteEvent = Instance.new("RemoteEvent")
-	receivePartyInviteEvent.Name = "ReceivePartyInvite"
-	receivePartyInviteEvent.Parent = ReplicatedStorage
-end
 local receivePartyInviteEvent = ReplicatedStorage:WaitForChild("ReceivePartyInvite")
-
-if not ReplicatedStorage:FindFirstChild("CancelMatchmaking") then
-	local cancelMatchmakingEvent = Instance.new("RemoteEvent")
-	cancelMatchmakingEvent.Name = "CancelMatchmaking"
-	cancelMatchmakingEvent.Parent = ReplicatedStorage
-end
 local cancelMatchmakingEvent = ReplicatedStorage:WaitForChild("CancelMatchmaking")
 
 local parties = {}
