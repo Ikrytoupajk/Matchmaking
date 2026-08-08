@@ -1,6 +1,8 @@
 -- Discord: Yaxnen Roblox: fhyuyuuy2
 -- MatchmakingServer
 
+-- SERVICES & CONSTANTS
+
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
@@ -8,7 +10,10 @@ local HttpService = game:GetService("HttpService")
 local MemoryStoreService = game:GetService("MemoryStoreService")
 local MessagingService = game:GetService("MessagingService")
 
+-- Target place ID for game instances
 local GAME_PLACE_ID = 87948231310659 
+
+-- REMOTE EVENTS SETUP
 
 local requestPlayModeEvent = ReplicatedStorage:WaitForChild("RequestPlayMode")
 local managePartyEvent = ReplicatedStorage:WaitForChild("ManageParty")
@@ -19,12 +24,14 @@ local acceptPartyInviteEvent = ReplicatedStorage:WaitForChild("AcceptPartyInvite
 local receivePartyInviteEvent = ReplicatedStorage:WaitForChild("ReceivePartyInvite")
 local cancelMatchmakingEvent = ReplicatedStorage:WaitForChild("CancelMatchmaking")
 
-local parties = {}
-local playerPartyMap = {}
-local pendingInvites = {}
+-- DATA STORAGE & STATE MANAGEMENT
 
-local activeQueueKeys = {}
+local parties = {}              -- Stores party details
+local playerPartyMap = {}       -- Fast lookup map
+local pendingInvites = {}       -- Active invites
+local activeQueueKeys = {}      -- Tracks active queue tickets
 
+-- Game mode configurations and required player counts
 local MODE_CONFIG = {
 	Solo = {size = 1},
 	Duo = {size = 2},
@@ -32,13 +39,14 @@ local MODE_CONFIG = {
 	Squad = {size = 4}
 }
 
---Party id
+-- HELPER FUNCTIONS
 
+--- Generates a unique Identifier (GUID) for a newly created party
 local function generatePartyId()
 	return HttpService:GenerateGUID(false)
 end
 
---Party status update
+--- Synchronizes and sends updated party state to all online party members
 local function updatePartyForMembers(partyId)
 	local partyData = parties[partyId]
 	if partyData then
@@ -51,16 +59,19 @@ local function updatePartyForMembers(partyId)
 	end
 end
 
+--- Cancels matchmaking for a player (and their entire party if queued together),
 
---exit queue
+--- removes their entry from MemoryStore, and updates client UI.
 local function removePlayerFromAllQueues(player)
 	if not player then return end
 
 	local qInfo = activeQueueKeys[player.UserId]
 	if qInfo then
+		-- Remove ticket from MemoryStore SortedMap
 		local map = MemoryStoreService:GetSortedMap("Matchmaking_" .. qInfo.Mode)
 		pcall(function() map:RemoveAsync(qInfo.Key) end)
 
+		-- Identify all local players associated with this queue ticket
 		local usersToClean = {}
 		for uid, info in pairs(activeQueueKeys) do
 			if info.Key == qInfo.Key then
@@ -68,6 +79,7 @@ local function removePlayerFromAllQueues(player)
 			end
 		end
 
+		-- Clear state and notify clients
 		for _, uid in ipairs(usersToClean) do
 			activeQueueKeys[uid] = nil
 			local p = Players:GetPlayerByUserId(uid)
@@ -82,8 +94,9 @@ local function removePlayerFromAllQueues(player)
 	end
 end
 
+-- CROSS-SERVER TELEPORT HANDLER
 
---crossserver 
+-- Subscribes to MessagingService to handle matched games across all server instances
 MessagingService:SubscribeAsync("CrossServerMatchFound", function(message)
 	local data = message.Data
 	local reservedCode = data.ReservedCode
@@ -91,6 +104,7 @@ MessagingService:SubscribeAsync("CrossServerMatchFound", function(message)
 
 	local playersToTeleport = {}
 
+	-- Gather all local player instances that are part of the matched tickets
 	for _, ticket in ipairs(tickets) do
 		for _, userId in ipairs(ticket.Players) do
 			local player = Players:GetPlayerByUserId(userId)
@@ -99,12 +113,15 @@ MessagingService:SubscribeAsync("CrossServerMatchFound", function(message)
 			end
 		end
 	end
+
+	-- Process teleportation if local players were found on this server
 	if #playersToTeleport > 0 then
 		for _, p in ipairs(playersToTeleport) do
 			activeQueueKeys[p.UserId] = nil 
 			updateClientMatchmakingStatusEvent:FireClient(p, "Game found! Teleporting...", nil, false, 0, 0)
 		end
 
+		-- Teleport all matched players to the reserved private server
 		local success, result = pcall(function()
 			TeleportService:TeleportToPrivateServer(GAME_PLACE_ID, reservedCode, playersToTeleport)
 		end)
@@ -118,7 +135,7 @@ MessagingService:SubscribeAsync("CrossServerMatchFound", function(message)
 	end
 end)
 
---queue check
+--- Checks if there are any players currently queuing on this specific server instance
 local function hasLocalPlayersInQueue(mode)
 	for _, info in pairs(activeQueueKeys) do
 		if info.Mode == mode then return true end
@@ -126,12 +143,14 @@ local function hasLocalPlayersInQueue(mode)
 	return false
 end
 
---matchmaking
+-- MATCHMAKING LOGIC
 
+-- Searches MemoryStore for queued players and attempts to group them into matches
 local function tryMatchmake(mode)
 	local map = MemoryStoreService:GetSortedMap("Matchmaking_" .. mode)
 	local requiredSize = MODE_CONFIG[mode].size
 
+	-- Fetch queued tickets from MemoryStore
 	local success, items = pcall(function()
 		return map:GetRangeAsync(Enum.SortDirection.Ascending, 50)
 	end)
@@ -141,6 +160,7 @@ local function tryMatchmake(mode)
 	local availableTickets = {}
 	local totalPlayers = 0
 
+	-- Filter out tickets that are already claimed by another server instance
 	for _, item in ipairs(items) do
 		if not item.value.ClaimedBy then
 			table.insert(availableTickets, {key = item.key, value = item.value})
@@ -148,6 +168,7 @@ local function tryMatchmake(mode)
 		end
 	end
 
+	-- Update status UI for local players currently waiting in queue
 	for uid, qInfo in pairs(activeQueueKeys) do
 		if qInfo.Mode == mode then
 			local p = Players:GetPlayerByUserId(uid)
@@ -158,6 +179,7 @@ local function tryMatchmake(mode)
 		end
 	end
 
+	--- Algorithm to find a combination of queue tickets that equals the required game mode size
 	local function findMatch()
 		for i = 1, #availableTickets do
 			local currentGroup = {availableTickets[i]}
@@ -179,10 +201,12 @@ local function tryMatchmake(mode)
 
 	local match = findMatch()
 
+	-- Process match if a valid combination of tickets was formed
 	if match then
 		local claimedTickets = {}
 		local allClaimed = true
 
+		-- Atomically claim tickets using UpdateAsync to prevent race conditions with other servers
 		for _, ticket in ipairs(match) do
 			local claimed = false
 			pcall(function()
@@ -207,6 +231,7 @@ local function tryMatchmake(mode)
 			end
 		end
 
+		-- If all tickets were successfully claimed, reserve a server and notify all game instances
 		if allClaimed then
 			local resSuccess, reservedCode = pcall(function()
 				return TeleportService:ReserveServer(GAME_PLACE_ID)
@@ -219,6 +244,7 @@ local function tryMatchmake(mode)
 					pcall(function() map:RemoveAsync(ct.key) end)
 				end
 
+				-- Broadcast match data across all server instances
 				pcall(function()
 					MessagingService:PublishAsync("CrossServerMatchFound", {
 						ReservedCode = reservedCode,
@@ -231,6 +257,7 @@ local function tryMatchmake(mode)
 			end
 		end
 
+		-- Rollback ticket claims if match allocation failed halfway
 		if not allClaimed then
 			for _, ct in ipairs(claimedTickets) do
 				pcall(function()
@@ -247,6 +274,7 @@ local function tryMatchmake(mode)
 	end
 end
 
+-- Background loop to process matchmaking queues every 5 seconds
 task.spawn(function()
 	while task.wait(5) do
 		for mode, _ in pairs(MODE_CONFIG) do
@@ -257,14 +285,16 @@ task.spawn(function()
 	end
 end)
 
---game mode request
+-- CLIENT EVENT HANDLERS
 
+--- Handles direct queue requests from individual players
 requestPlayModeEvent.OnServerEvent:Connect(function(player, mode)
 	if not MODE_CONFIG[mode] then
 		updateClientMatchmakingStatusEvent:FireClient(player, "Invalid game mode", 1.5, false, 0, 0)
 		return
 	end
 
+	-- Prevent queuing individually if already part of a party
 	if playerPartyMap[player.UserId] then
 		updateClientMatchmakingStatusEvent:FireClient(player, "You cannot queue individually while in a party. Leave the party.", 1.5, false, 0, 0)
 		return
@@ -272,6 +302,7 @@ requestPlayModeEvent.OnServerEvent:Connect(function(player, mode)
 
 	removePlayerFromAllQueues(player)
 
+	-- Handle Solo mode 
 	if mode == "Solo" then
 		updateClientMatchmakingStatusEvent:FireClient(player, "Preparing solo game...", nil, false, 1, 1)
 		local success, reservedCode = pcall(function()
@@ -286,6 +317,7 @@ requestPlayModeEvent.OnServerEvent:Connect(function(player, mode)
 			updateClientMatchmakingStatusEvent:FireClient(player, "Teleport error, try again", 2, false, 0, 0)
 		end
 	else
+		-- Add individual player to MemoryStore queue for multi-player modes
 		local map = MemoryStoreService:GetSortedMap("Matchmaking_" .. mode)
 		local key = tostring(os.time()) .. "_" .. HttpService:GenerateGUID(false)
 
@@ -307,11 +339,11 @@ requestPlayModeEvent.OnServerEvent:Connect(function(player, mode)
 	end
 end)
 
---party manage
-
+--- Handles party actions: Create, Leave, Kick, StartMatch
 managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 	local playerId = player.UserId
 
+	-- Party Creation
 	if action == "Create" then
 		if playerPartyMap[playerId] then
 			updateClientPartyStatusEvent:FireClient(player, parties[playerPartyMap[playerId]])
@@ -329,6 +361,7 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 		playerPartyMap[playerId] = partyId
 		updatePartyForMembers(partyId)
 
+		-- Leaving a Party
 	elseif action == "Leave" then
 		local partyId = playerPartyMap[playerId]
 		if not partyId or not parties[partyId] then return end
@@ -346,6 +379,7 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 		playerPartyMap[playerId] = nil
 		updateClientPartyStatusEvent:FireClient(player, nil)
 
+		-- Disband party if empty, otherwise transfer leadership if leader left
 		if #newMembers == 0 then
 			parties[partyId] = nil
 		else
@@ -357,6 +391,7 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 			updatePartyForMembers(partyId)
 		end
 
+		-- Kicking a Player from Party
 	elseif action == "Kick" then
 		local targetUserId = data
 		local partyId = playerPartyMap[playerId]
@@ -394,6 +429,7 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 			updatePartyForMembers(partyId)
 		end
 
+		-- Starting Matchmaking for the entire Party
 	elseif action == "StartMatch" then
 		local partyId = playerPartyMap[playerId]
 		local mode = data
@@ -410,6 +446,7 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 		local partySize = #party.MembersUserIds
 		local requiredSize = MODE_CONFIG[mode].size
 
+		-- Validation checks
 		if partySize > requiredSize then
 			updateClientMatchmakingStatusEvent:FireClient(player, "Error: Too many players for " .. mode, 1, false, 0, 0)
 			return
@@ -419,6 +456,7 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 			return
 		end
 
+		-- Gather all party member player instances
 		local playersInPartyObjects = {}
 		local playerIds = {}
 		for _, memberId in ipairs(party.MembersUserIds) do
@@ -433,6 +471,7 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 			end
 		end
 
+		-- Add the party to MemoryStore queue
 		local map = MemoryStoreService:GetSortedMap("Matchmaking_" .. mode)
 		local key = tostring(os.time()) .. "_" .. HttpService:GenerateGUID(false)
 
@@ -458,7 +497,9 @@ managePartyEvent.OnServerEvent:Connect(function(player, action, data)
 	end
 end)
 
---party events
+-- PARTY INVITE SYSTEM
+
+--- Sends a party invitation to a specified target player
 sendPartyInviteEvent.OnServerEvent:Connect(function(player, targetUserId)
 	local partyId = playerPartyMap[player.UserId]
 	if not partyId or not parties[partyId] or parties[partyId].LeaderUserId ~= player.UserId then return end
@@ -474,6 +515,7 @@ sendPartyInviteEvent.OnServerEvent:Connect(function(player, targetUserId)
 	receivePartyInviteEvent:FireClient(targetPlayer, player.UserId, player.Name)
 	updateClientMatchmakingStatusEvent:FireClient(player, "Invitation sent to " .. targetPlayer.Name, 1, false, 0, 0)
 
+	-- Auto-expire invitation after 15 seconds
 	task.delay(15, function()
 		if pendingInvites[targetUserId] and pendingInvites[targetUserId][player.UserId] == partyId then
 			pendingInvites[targetUserId][player.UserId] = nil
@@ -481,6 +523,7 @@ sendPartyInviteEvent.OnServerEvent:Connect(function(player, targetUserId)
 	end)
 end)
 
+--- Processes invite acceptance and rejection from the invitee
 acceptPartyInviteEvent.OnServerEvent:Connect(function(player, senderUserId, accepted)
 	local playerId = player.UserId
 	local senderPartyId = nil
@@ -507,14 +550,14 @@ acceptPartyInviteEvent.OnServerEvent:Connect(function(player, senderUserId, acce
 	end
 end)
 
---search cancel
-
+--- Cancels matchmaking queue search upon client request
 cancelMatchmakingEvent.OnServerEvent:Connect(function(player)
 	removePlayerFromAllQueues(player)
 end)
 
---player join
+-- PLAYER LIFECYCLE HANDLERS
 
+--- Sync party state when player connects to the server
 Players.PlayerAdded:Connect(function(player)
 	local partyId = playerPartyMap[player.UserId]
 	if partyId and parties[partyId] then
@@ -524,17 +567,18 @@ Players.PlayerAdded:Connect(function(player)
 	end
 end)
 
---player exit
-
+--- Cleanup queue tickets, invites, and party structure when player leaves
 Players.PlayerRemoving:Connect(function(player)
 	local playerId = player.UserId
 	removePlayerFromAllQueues(player)
 
+	-- Clear pending invites sent by or to the player
 	for targetUserId, invitesFromSender in pairs(pendingInvites) do
 		if invitesFromSender[playerId] then invitesFromSender[playerId] = nil end
 	end
 	pendingInvites[playerId] = nil
 
+	-- Handle party restructuring or cleanup on disconnect
 	local partyId = playerPartyMap[playerId]
 	if partyId and parties[partyId] then
 		local party = parties[partyId]
