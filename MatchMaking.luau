@@ -22,7 +22,7 @@ local MessagingService = game:GetService("MessagingService")
 local GAME_PLACE_ID = 87948231310659 
 
 --[[
-    STATE MANAGEMENT (Nested Complexity)
+    STATE MANAGEMENT
     Encapsulating state into a centralized system object to ensure data consistency
     and avoid global namespace pollution. This adds structural complexity.
 ]]
@@ -462,5 +462,3 @@ MatchmakingSystem.Events.Server.ManageParty.OnServerEvent:Connect(function(playe
         end
     end
 end)
-
--- (PlayerAdded, PlayerRemoving handlers and party invite logic omitted for brevity, but they continue the same OOP principles)
